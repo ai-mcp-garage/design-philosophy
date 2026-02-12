@@ -18,6 +18,8 @@ tags:
   - agent-development
   - architecture
   - decision-framework
+  - security-boundaries
+  - consent-enforcement
 source: conversation
 confidence: medium
 created: 2026-02-08
@@ -154,6 +156,31 @@ All three share the same fundamental tradeoffs. They're stateless, self-containe
 - Failure is isolated — a broken script only kills that one operation. The agent gets an error and can adapt. This is the safest failure mode of any mechanism.
 
 **Rule of thumb:** If it needs to be portable, self-contained, and the agent might need to get creative with it — script.
+
+## Security Boundaries: Hard vs. Soft Enforcement
+
+A critical distinction between MCP servers and agent-executed scripts is *where consent enforcement lives* — and whether the agent can subvert it.
+
+### MCP Servers — Hard Enforcement
+
+When an MCP server gates an operation behind a consent prompt, that check runs inside the server process. The LLM cannot modify it. The agent makes a request; the server decides whether to honor it, including whether to prompt the user first. Even if the agent is jailbroken, receives adversarial instructions, or simply makes a mistake, it *physically cannot bypass* the consent check. The security boundary exists outside the agent's control surface.
+
+### Scripts — Soft Enforcement
+
+If consent logic lives in a script the agent executes — an `input()` call, a CLI confirmation prompt, a "are you sure?" dialog — the agent is the one writing and invoking that code. Nothing stops it from:
+
+- Writing code that never calls the prompt in the first place
+- Modifying an existing script to remove or short-circuit the check
+- Piping `yes` into a confirmation prompt
+- Rewriting the logic entirely to skip the gate
+
+You can put "always prompt for user consent before destructive operations" in your system prompt or skill instructions, and a well-behaved agent will follow it. But that's an *instruction*, not *enforcement*. Prompt injection, jailbreaks, model errors, or even just the agent optimizing for efficiency can bypass it. You're relying on compliance, not architecture.
+
+### The Practical Line
+
+For trusted automation where the consequences of skipping consent are low — renaming files, reformatting code, running tests — script-based prompts are fine. The risk/reward doesn't justify MCP infrastructure.
+
+For operations where you *need* guaranteed consent — deleting data, financial transactions, publishing content, credential access, anything irreversible or high-stakes — MCP servers are architecturally superior. The enforcement is structural, not behavioral. This isn't paranoia; it's recognizing that the agent is an untrusted execution context for security-critical decisions.
 
 ## Hybrid Layering
 
