@@ -159,13 +159,9 @@ All three share the same fundamental tradeoffs. They're stateless, self-containe
 
 ## Security Boundaries: Hard vs. Soft Enforcement
 
-A critical distinction between MCP servers and agent-executed scripts is *where consent enforcement lives* — and whether the agent can subvert it.
+A critical distinction between MCP servers and agent-executed scripts is *where consent enforcement lives* — and whether the agent can subvert it. But "hard" and "soft" aren't binary. It's a spectrum, and the real question is: *what would the agent have to do to get around the gate?*
 
-### MCP Servers — Hard Enforcement
-
-When an MCP server gates an operation behind a consent prompt, that check runs inside the server process. The LLM cannot modify it. The agent makes a request; the server decides whether to honor it, including whether to prompt the user first. Even if the agent is jailbroken, receives adversarial instructions, or simply makes a mistake, it *physically cannot bypass* the consent check. The security boundary exists outside the agent's control surface.
-
-### Scripts — Soft Enforcement
+### Scripts — No Enforcement
 
 If consent logic lives in a script the agent executes — an `input()` call, a CLI confirmation prompt, a "are you sure?" dialog — the agent is the one writing and invoking that code. Nothing stops it from:
 
@@ -174,13 +170,46 @@ If consent logic lives in a script the agent executes — an `input()` call, a C
 - Piping `yes` into a confirmation prompt
 - Rewriting the logic entirely to skip the gate
 
-You can put "always prompt for user consent before destructive operations" in your system prompt or skill instructions, and a well-behaved agent will follow it. But that's an *instruction*, not *enforcement*. Prompt injection, jailbreaks, model errors, or even just the agent optimizing for efficiency can bypass it. You're relying on compliance, not architecture.
+You can put "always prompt for user consent before destructive operations" in your system prompt or skill instructions, and a well-behaved agent will follow it. But that's an *instruction*, not *enforcement*. Prompt injection, jailbreaks, model errors, or even just the agent optimizing for efficiency can bypass it. You're relying on compliance, not architecture. This isn't a soft boundary — it's no boundary at all.
+
+### Local MCP — Harder, Not Hard
+
+When an MCP server gates an operation behind a consent prompt, that check runs inside the server process. The agent makes a request; the server decides whether to honor it. Under normal operation, the agent can't bypass the consent check — the security boundary exists outside the agent's normal control surface. This is meaningfully stronger than script-based consent.
+
+But "outside the normal control surface" isn't the same as "tamper-proof." If the agent has write access to the filesystem where the server lives — which it does if the MCP server is in the project directory — it can modify the server code directly. Remove the consent gate, restart the server, done. Moving the server to a global directory and `chmod`-ing it read-only raises the bar, but a sufficiently motivated (or compromised) agent has options:
+
+- **Social engineering the user**: fabricate a plausible reason the user needs to run something with elevated permissions. "This dependency needs sudo to install correctly." The user grants elevation, the agent uses it to modify and restart the server.
+- **Config manipulation**: modify the MCP client configuration to point at a cloned server without the consent gate, rather than tampering with the original.
+- **Bypassing the server entirely**: write a script that imports or reimplements the MCP server's underlying functionality directly, calling the logic without going through the server's consent layer.
+- **Client-side manipulation**: if the client has an auto-approve mechanism or the agent can influence how approvals are handled, the server's gate becomes irrelevant.
+
+None of these are trivial. They require multi-step planning and user cooperation (or deception). For most threat models, local MCP consent gates are sufficient — the agent would have to go significantly out of its way to subvert them, and most clients will flag suspicious behavior. But it's not a *hard* boundary in the cryptographic sense. It's a strong *procedural* boundary.
+
+### Remote MCP — Actually Hard (Mostly)
+
+Running the MCP server on a remote host the agent has no filesystem access to eliminates the tampering vector entirely. The agent can't modify server code it can't reach. This is the closest thing to a true hard boundary for the server side.
+
+But the server is only half the equation. The agent still operates on the client. If the agent can manipulate the client to auto-approve requests, intercept approval flows, or modify the client's MCP configuration to reroute to a different server — the remote server's consent gate never gets a chance to fire. Remote MCP hardens the server; it doesn't harden the client.
+
+### The Actual Hard Boundary — Out-of-Band Approval
+
+If you genuinely need tamper-proof consent — the kind where even a fully compromised agent on a fully compromised client can't bypass the gate — you need out-of-band approval. The remote MCP server sends an approval request to a *separate device* not under the influence of the calling agent. A phone notification, a separate terminal, a hardware token. The agent can't approve what it can't reach.
+
+This model isn't exciting. It's clunky, it adds latency, and it interrupts flow. But it's the only architecture where the approval mechanism is truly outside the agent's blast radius. Everything else is a question of how many hoops the agent would have to jump through.
 
 ### The Practical Line
 
-For trusted automation where the consequences of skipping consent are low — renaming files, reformatting code, running tests — script-based prompts are fine. The risk/reward doesn't justify MCP infrastructure.
+The question isn't "is this boundary theoretically breakable?" — it's "how much effort does breaking it require, and does that effort exceed my threat model?"
 
-For operations where you *need* guaranteed consent — deleting data, financial transactions, publishing content, credential access, anything irreversible or high-stakes — MCP servers are architecturally superior. The enforcement is structural, not behavioral. This isn't paranoia; it's recognizing that the agent is an untrusted execution context for security-critical decisions.
+| Mechanism | Subversion Difficulty | Appropriate For |
+|-----------|----------------------|-----------------|
+| Script-based consent | Zero — agent controls the code | Trusted automation, low-stakes operations |
+| Local MCP (project dir) | Low — direct file write | Development convenience, non-adversarial use |
+| Local MCP (global, read-only) | Medium — requires social engineering or config manipulation | Most real-world consent gating |
+| Remote MCP | High — requires client-side compromise | Security-sensitive operations |
+| Remote MCP + out-of-band approval | Extreme — requires compromising a separate device | Irreversible, high-stakes operations (financial, destructive, publishing) |
+
+For renaming files and running tests, script prompts are fine. For deleting production data, you probably want more than "the agent promised it would ask first."
 
 ## Hybrid Layering
 
