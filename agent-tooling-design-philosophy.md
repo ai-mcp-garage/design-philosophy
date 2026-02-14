@@ -16,6 +16,8 @@ If you already know what an agent is supposed to do, you should encode that know
 
 An agent generating raw CLI commands or raw queries on the fly is doing work that we, the developers, already did when we designed the workflow. Offloading that work back to the model at inference time is wasteful at best and dangerous at worst.
 
+The corollary: tools should exist to remove known failure modes, not just to add capabilities. If a model *can* do something through bash but frequently fails at it due to escaping, quoting, or syntax complexity, that's a signal to build a tool. The tool's value isn't that it does something the model can't — it's that it does something the model gets wrong.
+
 ---
 
 ## Security
@@ -61,6 +63,22 @@ Replace that with a high-level tool call like `get_account_details(account_id)` 
 Complex queries and multi-flag CLI commands are exactly the kind of thing language models get wrong in subtle ways. A misplaced quote, a wrong field name, a missing flag. These errors are hard to catch, hard to debug, and they compound in multi-step workflows.
 
 Simple, well-defined tool calls are far more likely to succeed on the first attempt. They also require less capable (and less expensive) models to execute reliably. If a task can be accomplished with a straightforward function call instead of a generated query, there is no reason to use the harder path.
+
+### Case Study: File Operations
+
+The clearest illustration of this principle is file operations. Models can technically read, write, and edit files through bash — `sed`, `awk`, `echo` with redirects, heredocs, `cat <<EOF`. Every one of these works. And every one of these has a failure surface that models hit constantly:
+
+- **`sed`** has escaping rules that models get wrong. Special characters, regex metacharacters, multi-line patterns, the difference between basic and extended regex — each is a class of error that compounds when the content being edited contains quotes, slashes, or brackets.
+- **`awk`** requires understanding state machines for multi-line edits. Models generate syntactically plausible awk that silently does the wrong thing.
+- **Heredocs** have quoting edge cases. `'EOF'` vs `EOF` controls variable expansion. Nested quotes inside heredocs interact with the shell's own quoting. Models get this wrong in ways that produce corrupted output.
+- **`echo` with redirects**: `>` vs `>>` is a one-character difference between "replace the file" and "append to the file." Getting this wrong destroys content.
+- **All of these** require the model to reason about shell escaping *on top of* the actual content it's trying to write or edit. That's two layers of reasoning — the edit and the shell mechanics of expressing the edit — where one layer would suffice.
+
+Purpose-built file tools collapse this entire error surface. `Edit(file, old_string, new_string)` can't misquote, can't clobber, can't mis-escape. `Write(file, content)` can't accidentally append when it should replace. `Read(file)` can't fail because of a quoting issue in a `cat` command.
+
+The tools don't add capability the model doesn't have. The model *can* do all of this through bash. The tools remove the ways the model *fails* at doing it through bash. That's the core principle in action: we know that `sed` escaping is error-prone for models, that heredoc quoting is a trap, that redirect operators are a clobber risk. We encode that knowledge into tools that bypass those failure modes entirely.
+
+This is why some of the most effective agent harnesses use just a handful of tools — Read, Write, Edit, Bash — rather than exposing raw shell access for everything. Four tools that remove known failure classes outperform unrestricted bash access, because the tools encode the developers' knowledge of where models fail. Bash remains available for everything else — commands where the model is actually reliable at composing the syntax. The tool boundary is drawn at the failure boundary, not the capability boundary.
 
 ---
 
@@ -125,5 +143,6 @@ But for defined, repeatable agentic workflows where we know what the agent needs
 | Portability | OS-level dependency | Runtime dependency |
 | Human-in-the-loop | Difficult to retrofit | First-class design option |
 | Lateral movement risk | Authenticated CLI available system-wide | Scoped to the running process |
+| Design intent | Expose raw capabilities | Remove known failure modes |
 
 Build the harness. Encode what you know. Don't make the agent rediscover it every time it runs.
