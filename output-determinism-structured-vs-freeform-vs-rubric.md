@@ -26,28 +26,34 @@ created: 2026-02-14
 
 # Output Determinism: Structured Outputs, Free Generation, and Rubric Evaluation
 
-When an agent produces output — a JSON payload for a downstream system, a bug report for a human, a decision that feeds another agent — what determines whether that output is reliable? The answer isn't one mechanism. It's three distinct layers, each solving a different problem, each with different costs, and each composable with the others.
+When an agent produces output — a JSON payload for a downstream system, a bug report for a human, a decision that feeds another agent — what determines whether that output is reliable? The answer isn't one mechanism. It's four distinct layers, each solving a different problem, each with different costs, and each composable with the others.
 
 The common framing of "structured outputs vs. free generation" collapses these layers into a single binary choice. That framing loses the important distinctions. A perfectly schema-valid JSON bug report can be useless. A free-text analysis with no format constraints can be exactly right. The question isn't "structured or unstructured" — it's "which layers of output quality does this use case actually need?"
 
-## The Three Layers of Output Quality
+## The Four Layers of Output Quality
 
 ```
-Format Compliance ──→ Content Accuracy ──→ Semantic Quality
- "Is this valid?"      "Is this correct?"    "Is this good enough?"
+Format Compliance ──→ Coverage Determinism ──→ Content Accuracy ──→ Semantic Quality
+ "Is this valid?"      "Did it find everything?"   "Is this correct?"    "Is this good enough?"
 ```
 
 Each layer solves a different class of failure, requires different mechanisms, and has different cost profiles. They build on each other but are independently addressable.
 
-**Format compliance.** Does the output match the expected structure? Valid JSON, correct field names, expected types, no missing required fields. This is the problem structured outputs solve. The failure mode is mechanical: a downstream parser crashes, an API rejects the payload, a pipeline step gets null where it expected a string.
+**Format compliance.** Does the output match the expected structure? Valid JSON, correct field names, expected types, no missing required fields. This is the problem constrained decoding solves. The failure mode is mechanical: a downstream parser crashes, an API rejects the payload, a pipeline step gets null where it expected a string.
 
-**Content accuracy.** Are the values correct? The JSON is valid and the fields are present, but is the severity rating right? Is the account ID the one the user asked about? Did the agent cite the correct standard? This is a factual correctness problem. Format validation can't catch it — a well-formed lie passes every schema check. Verification requires ground truth: checking against a database, running a test, comparing to known values.
+**Coverage determinism.** Did the output address everything it should have? When the task is "evaluate this document against all relevant criteria," did the model find three issues or ten? Did it evaluate every category, or skip some and hallucinate others? This is a scope problem — the output's structure may be correct and the individual findings may be accurate, but the coverage is non-deterministic. Run the same task twice, get a different number of findings.
 
-**Semantic quality.** Is the output good enough for its purpose? The bug report has all required fields with accurate values, but is the description clear? Are the reproduction steps sufficient for another engineer to follow? Is the severity justification convincing? This is a judgment problem. It's what a senior reviewer evaluates when they read a draft — not whether the format is right or the facts are wrong, but whether the artifact achieves its purpose.
+This is where structured outputs provide value beyond format compliance. When the schema defines the *evaluation space* — "for each of these 8 categories, provide your assessment" — the model can't skip categories or invent new ones. The schema doesn't just enforce format; it enforces scope. You're not asking "what should we evaluate?" You're saying "evaluate these things" and asking "what did you find in each area?" That's a fundamentally different reliability profile.
 
-Most discussions about output reliability conflate these layers. "Use structured outputs for reliability" addresses only the first layer. "The model is good enough now" usually refers to the first layer being less of a concern, while saying nothing about the second or third. "Use rubrics" addresses the third layer but doesn't help when the output can't be parsed.
+Without structured outputs, coverage is a function of the model's attention, the prompt's specificity, and randomness. With structured outputs, coverage is a function of the schema. The schema makes coverage deterministic in the same way it makes format deterministic — by removing the model's discretion over what to include.
 
-**The key insight:** Schema validation is necessary but insufficient for quality. A perfectly valid JSON bug report can still be useless. Conversely, an unstructured free-text analysis can be exactly right for its purpose if no downstream system needs to parse it. Match the mechanism to the actual failure mode you're preventing.
+**Content accuracy.** Are the values correct? The JSON is valid, the coverage is complete, but is the severity rating right? Is the account ID the one the user asked about? Did the agent cite the correct standard? This is a factual correctness problem. Neither format validation nor coverage enforcement can catch it — a well-formed, comprehensive lie passes every schema check. Verification requires ground truth: checking against a database, running a test, comparing to known values.
+
+**Semantic quality.** Is the output good enough for its purpose? The bug report has all required fields with accurate values across all categories, but is the description clear? Are the reproduction steps sufficient for another engineer to follow? Is the severity justification convincing? This is a judgment problem. It's what a senior reviewer evaluates when they read a draft — not whether the format is right or the scope is complete or the facts are wrong, but whether the artifact achieves its purpose.
+
+Most discussions about output reliability conflate these layers. "Use structured outputs for reliability" addresses the first two layers but says nothing about the third or fourth. "The model is good enough now" usually refers to the first layer being less of a concern, while saying nothing about the rest. "Use rubrics" addresses the fourth layer but doesn't help when the output can't be parsed or missed half the evaluation space.
+
+**The key insight:** Each layer fails independently. A bug report can be perfectly formatted, cover all categories, contain accurate facts, and still be poorly written. It can also be well-written, accurate, and complete — but in a format that nothing can parse. Match the mechanism to the actual failure mode you're preventing.
 
 ## Constrained Decoding and Structured Outputs
 
@@ -60,6 +66,7 @@ Several mechanisms exist: API-level response schemas (OpenAI's `response_format`
 - Format compliance on every invocation. No retries needed for malformed output.
 - Type safety for downstream consumers. The integer field contains an integer. The enum field contains one of the allowed values.
 - Parseable output without heuristic extraction. No regex, no "find the JSON in the markdown," no hoping the model remembered to close its braces.
+- Coverage enforcement when the schema defines the evaluation space. A schema that requires assessment of 8 named categories guarantees all 8 are addressed. Free generation might produce 3 or 12, varying between runs.
 
 **What constrained decoding costs:**
 
@@ -176,6 +183,9 @@ The review/quality gate pattern from *Agent Workflow Decomposition* is rubric ev
 | What volume? | Interactive (single user) | **Instruction-following may suffice** — retry is cheap |
 | What's the reasoning complexity? | High | **Free generation** with optional structured extraction — don't constrain reasoning |
 | What's the reasoning complexity? | Low (slot-filling, classification) | **Constrained decoding** — minimal accuracy cost |
+| Is the task scope-bounded (known evaluation categories)? | Yes | **Structured outputs** — schema enforces coverage, not just format |
+| Does coverage vary unpredictably between runs? | Yes | **Structured outputs** — define the evaluation space in the schema |
+| Is "did it find everything?" a critical failure mode? | Yes | **Structured outputs + enumerated categories** — constrain scope |
 | Is the failure mode "wrong but valid"? | Yes | **Rubric evaluation** — schemas can't catch this |
 | Is the failure mode "can't parse"? | Yes | **Constrained decoding** — guaranteed parseable |
 | Does quality have subjective dimensions? | Yes | **Rubric evaluation** — operationalize the review |
@@ -202,9 +212,9 @@ Use for: analysis tasks that produce a structured result, complex classification
 
 **Pattern 3: Constrained decoding + rubric evaluation.**
 
-Two-layer. The output is structurally valid (constrained decoding ensures this) and also semantically adequate (rubric evaluation checks this). This is defense in depth — the schema catches format failures, the rubric catches quality failures.
+Two-layer. The output is structurally valid and scope-complete (constrained decoding ensures both — the schema defines what must be addressed) and also semantically adequate (rubric evaluation checks whether each item is addressed well). The schema handles format and coverage. The rubric handles quality. This is the strongest pattern for bounded evaluation tasks.
 
-Use for: high-stakes artifacts consumed by both machines and humans (compliance reports, audit findings), multi-agent handoffs where the downstream agent needs both parseable input and high-quality content, pipeline outputs where "valid but wrong" is the dangerous failure mode.
+Use for: high-stakes artifacts consumed by both machines and humans (compliance reports, audit findings), multi-agent handoffs where the downstream agent needs both parseable input and high-quality content, pipeline outputs where "valid but wrong" is the dangerous failure mode, evaluation tasks where both completeness and quality matter.
 
 **Pattern 4: Free generation → constrained extraction → rubric evaluation.**
 
@@ -244,13 +254,30 @@ A model can follow a format instruction perfectly and still produce a vague, unh
 
 This means: rubric evaluation is becoming proportionally more important, not less. As format compliance becomes easier to guarantee, the remaining quality failures are increasingly semantic — exactly the type that rubrics catch and schemas miss. Invest in rubrics proportionally more as models improve at format compliance.
 
+**Coverage determinism is not improving at the same rate as format compliance.**
+
+Models are better at following format instructions, but they are not systematically better at exhaustive enumeration. When asked to "list all X" or "evaluate every area where Y applies," models still exhibit variable recall across runs — finding 5 issues one run and 8 the next, not because the task changed but because attention allocation is non-deterministic. This makes structured schemas — which enforce coverage by defining the enumeration space — remain valuable even as format compliance becomes less of a concern. Coverage is the layer where structured outputs provide the most durable value.
+
+**Model capability as a determinism lever.**
+
+The discussion above implicitly assumes frontier models. But the trade-off between structured outputs and free generation isn't just "models are getting better so constraints matter less." It's a function of *which* model you're using:
+
+- **Frontier models** (Claude Opus, GPT-4.1): instruction-following is reliable enough that format constraints are defense-in-depth. Coverage determinism and rubric evaluation are where structured outputs add the most value.
+- **Mid-tier models** (Claude Sonnet, GPT-4o-mini, Gemini Flash): format compliance is mostly reliable but coverage and consistency degrade. Structured outputs shift from "defense in depth" back to "required for reliability."
+- **Smaller/open models** (Qwen, Llama, Mistral at smaller parameter counts): format compliance is unreliable without constrained decoding. Coverage is highly variable. Structured outputs and programmatic steering are not optional — they're the mechanism that makes the model usable for the task.
+
+We may be spoiled by how good frontier models are right now. They handle ambiguity, recover from errors, and follow complex instructions in ways that make the agentic assistant pattern feel natural. But those models are also expensive. If the budget requires a smaller model — or if you're running at a scale where per-token cost matters — the architecture needs to compensate with more structure, more gating, and more validation. Structured outputs become not just a quality mechanism but an economic one: they let you use cheaper models for tasks that would otherwise require expensive ones.
+
+The implication: your choice of architecture (see *Agent Architecture Spectrum*) is partly determined by which model you can afford. If the budget requires a smaller model, the architecture needs to compensate — which pushes you toward the programmatic end of the spectrum and toward heavier use of structured outputs at every layer.
+
 **The practical implication:**
 
 If you're deciding where to invest engineering effort in output quality:
 
-1. Format compliance infrastructure (constrained decoding, validation layers) is mature and becoming commoditized. Use it, but don't over-engineer it.
-2. Content accuracy infrastructure (retrieval, grounding, tool-assisted verification) is where the current active development is.
-3. Semantic quality infrastructure (rubric evaluation, review agents, quality feedback loops) is underinvested relative to its importance and is where the highest marginal returns are.
+1. Format compliance infrastructure (constrained decoding, validation layers) is mature and becoming commoditized for frontier models. Still essential for smaller models.
+2. Coverage determinism infrastructure (schema-defined evaluation spaces, enumerated categories) is underappreciated and provides durable value across all model tiers.
+3. Content accuracy infrastructure (retrieval, grounding, tool-assisted verification) is where the current active development is.
+4. Semantic quality infrastructure (rubric evaluation, review agents, quality feedback loops) is underinvested relative to its importance and is where the highest marginal returns are.
 
 ## Anti-Patterns
 
@@ -266,10 +293,12 @@ If you're deciding where to invest engineering effort in output quality:
 
 **Evaluating the generating model with itself.** Self-evaluation has systematic blind spots — models are biased toward rating their own output favorably and tend to miss the same errors in review that they made in generation. Use a separate model, a separate prompt, or ideally a separate agent invocation with different instructions and context.
 
+**Asking the model to determine its own scope.** "Identify all areas that need evaluation" is an open-ended coverage question. The model will find a different number of areas on different runs, may hallucinate categories, and may miss important ones. If you know the evaluation categories, encode them in the schema — that's what coverage determinism is for. If you don't know the categories, that's a *discovery* task. Do it first, review the results, then use the discovered categories as your schema for the evaluation task. Don't conflate scope discovery with scoped evaluation. The first is inherently non-deterministic. The second doesn't have to be.
+
 **Treating structured outputs as the solution to output determinism.** Structured outputs solve format determinism — the same schema produces the same structure every time. They do not solve semantic determinism — the same prompt does not produce the same reasoning or conclusions every time. If what you actually need is reproducible decision-making, structured outputs address the wrong layer. You need deterministic inputs (grounded retrieval, explicit criteria) and deterministic evaluation (rubric-based assessment), not just deterministic formatting.
 
 ## The Core Design Principle
 
-Output quality has three layers — format compliance, content accuracy, and semantic quality — and each is solved by a different mechanism. Structured outputs guarantee format. Grounding and verification address accuracy. Rubrics evaluate quality. The right combination depends on who consumes the output, what the failure cost is, and which failure modes you can actually afford.
+Output quality has four layers — format compliance, coverage determinism, content accuracy, and semantic quality — and each is solved by a different mechanism. Structured outputs guarantee format and enforce coverage. Grounding and verification address accuracy. Rubrics evaluate quality. The right combination depends on who consumes the output, what the failure cost is, which model you're using, and which failure modes you can actually afford.
 
-The most common mistake is solving the easiest layer (format compliance) and assuming the output is reliable. The most expensive mistake is adding layers you don't need. Match the mechanism to the actual failure mode, not the theoretical one.
+The most common mistake is solving the easiest layer (format compliance) and assuming the output is reliable. The most underappreciated layer is coverage — structured schemas that define the evaluation space provide durable value across all model tiers and don't become less important as models improve. The most expensive mistake is adding layers you don't need. Match the mechanism to the actual failure mode, not the theoretical one.

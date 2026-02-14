@@ -124,6 +124,73 @@ The session model determines your infrastructure requirements:
 
 **Autonomous agents**: automated policies handle failures. Retry with backoff, fallback to a simpler approach, escalate to a different agent, or fail with a structured error report. The failure handling must be pre-designed because there's no human to improvise. This requires anticipating failure modes — a fundamentally different engineering challenge than handling them interactively.
 
+### Control Surface and Decision Gating
+
+Orchestration authority has a concrete, practical consequence that determines what you can actually *do* at each point on the spectrum: the **control surface** — the number and placement of points where non-model logic can execute during a workflow.
+
+**Programmatic frameworks have maximum control surface.** Every turn boundary is a code boundary. Between any two model calls, you can:
+
+- Run validation logic on the model's output before the next step proceeds
+- Insert human-in-the-loop approval at any decision point — not just at tool invocation, but at *any* step in the workflow
+- Gate decisions based on business logic, thresholds, external state, or policy checks
+- Transform, enrich, or redirect the model's output before the next step sees it
+
+Human-in-the-loop in a programmatic framework is a function call, not a platform feature. A result validator can pause, present the model's output to a human, wait for approval, and proceed or reject. You can put this at any decision boundary. You're not waiting for the framework to offer you a hook — you *are* the framework.
+
+You're also free from infrastructure constraints you didn't choose. No MCP client timeouts. No session length limits imposed by the runtime. No context window budgets managed by someone else's compaction algorithm. You own the execution loop, so you own the timing.
+
+**Agentic assistants have a constrained control surface.** The runtime determines your intervention points:
+
+- **MCP permission gates**: the agent requests a tool call, the runtime prompts the user for approval. Control is at the tool-invocation boundary.
+- **Elicitation prompts**: the agent explicitly asks the user for input. Control is where the agent decides to ask.
+- **Session-level steering**: the user redirects or corrects between turns. Control is between complete agent responses.
+
+You cannot insert arbitrary validation between the model's internal reasoning steps. If the model evaluates section 3 and moves to section 4, you don't get a gate in between unless the model cooperates by making a tool call or asking for input at that point. The control points are what the runtime exposes. If the runtime doesn't offer a hook between two steps, you don't get one.
+
+You're also subject to the runtime's infrastructure constraints — MCP client timeouts, session length limits, context window budgets. These are constraints you inherited, not decisions you made. They can be worked around (hooks, timeout configuration, session management), but the workarounds are adaptations to someone else's architecture.
+
+**Autonomous agents have the programmatic control surface but at design time, not runtime.** You can insert validation, gating, and policy checks into the autonomous agent's execution loop. But you define them before the agent runs. There's no human to intervene ad hoc — every control point must be anticipated and coded. This is the same control surface as the programmatic model, with the additional challenge that the model's *path* through those control points is non-deterministic. You can gate every tool call, but you can't predict which tool calls the agent will make or in what order.
+
+| Aspect | Programmatic | Assistant | Autonomous |
+|--------|-------------|-----------|------------|
+| Validation between steps | Any step, developer-controlled | Runtime-exposed hooks only | Any step, pre-designed |
+| Human-in-the-loop placement | Anywhere (it's a function call) | MCP gates, elicitations, steering | Not available at runtime |
+| Decision gating | Code-level, arbitrary logic | Agent cooperation required | Policy-based, pre-designed |
+| Infrastructure constraints | None (you own the loop) | Runtime-imposed (timeouts, session limits) | Self-imposed (budgets, timeouts) |
+| Per-step output validation | Native (result validators, assertions) | Only if the runtime supports it | Native (but must be pre-designed) |
+
+**Rule of thumb:** If you need to gate, validate, or intervene at specific decision points within the workflow — not just at tool boundaries — that pushes you toward the programmatic end of the spectrum. The more granular your control needs, the more the programmatic model pays for itself.
+
+### Model Capability and the Spectrum
+
+Where you sit on the spectrum is partly determined by the model you can afford. The agentic assistant and autonomous agent architectures depend on model capabilities that not every model has:
+
+- **Ambiguity resolution.** When the task is unclear, frontier models ask clarifying questions or make reasonable assumptions. Smaller models get stuck, loop, or hallucinate a path forward.
+- **Failure recovery.** When a tool call fails, frontier models diagnose the error, adjust their approach, and retry intelligently. Smaller models repeat the same failed call, produce increasingly incoherent recovery attempts, or abandon the task entirely.
+- **Consistent tool use.** Frontier models call tools with correct arguments across hundreds of invocations in a long session. Smaller models drift — argument formats shift, required parameters get dropped, tool selection becomes erratic as context grows.
+- **Self-evaluation.** Autonomous agents need to evaluate their own progress against a termination specification. This is a meta-cognitive task that smaller models perform poorly — they're biased toward "done" and can't reliably assess their own output quality.
+
+We may be spoiled by how good frontier models are right now. They handle ambiguity, recover from errors, and follow complex instructions in ways that make the agentic assistant pattern feel natural and the autonomous agent pattern feel viable. But those models are also expensive. When the budget requires a smaller model — or when running at a scale where per-token cost matters — the architecture needs to compensate for what the model lacks.
+
+**The cost-architecture mapping:**
+
+| Model tier | Cost profile | Reliable architecture |
+|-----------|-------------|----------------------|
+| Frontier (Opus, GPT-4.1) | Highest per-token | Full spectrum — assistant and autonomous patterns work reliably |
+| Mid-tier (Sonnet, Flash, GPT-4o-mini) | Moderate | Programmatic with agentic subtasks — use the model for reasoning steps but own the orchestration |
+| Smaller/open (Qwen-7B, Llama-8B, Mistral) | Low per-token | Programmatic with structured outputs — model fills in blanks within a rigid framework |
+| Classification tasks | Minimal | **Not an LLM problem** — fine-tuned classifiers, rules engines, regex |
+
+This isn't a model quality judgment — it's an architectural constraint. A smaller model in a programmatic framework with structured outputs and per-step validation can outperform a frontier model in a loose agentic pattern, because the framework compensates for what the model lacks. The structure provides the consistency, the recovery, and the coverage guarantees (see *Output Determinism*) that the model can't provide on its own.
+
+**The lower bound: when LLMs are the wrong tool.**
+
+At the bottom of the capability requirements — binary classification, entity extraction from known formats, simple categorization where the answer is "is it a thing or is it not" — LLMs are overkill regardless of architecture. A fine-tuned BERT classifier, a rules engine, or even a regex does the job faster, cheaper, and more deterministically than any LLM in any framework. The spectrum doesn't just go from programmatic to autonomous; it extends below programmatic to "not an LLM task at all."
+
+Recognizing this boundary avoids the common mistake of using an LLM (and paying LLM costs) for tasks that a traditional ML classifier handles perfectly. If the decision space is known and bounded, the categories are fixed, and the task is pattern matching rather than reasoning — don't reach for an LLM.
+
+**Rule of thumb:** If you're choosing between a frontier model with light orchestration and a smaller model with heavy orchestration, cost the comparison honestly. The cheaper model with a programmatic framework may give you better reliability at lower total cost — but you're paying in engineering effort instead of per-token cost. The trade-off is money vs. build complexity, and there's a right answer for every budget and team.
+
 ## The Infrastructure Convergence
 
 The three points on the spectrum are converging from both directions. Understanding the convergence helps you choose based on current needs without locking yourself into a dead end.
@@ -147,6 +214,8 @@ The orchestration — who decides what happens next, when to use which tool, whe
 **Observability.** A programmatic pipeline logs structured events at each step. An agentic assistant logs a conversation transcript. An autonomous agent logs a potentially long, branching reasoning trace. The tools for understanding what happened and why it went wrong are different for each.
 
 **Predictability.** A programmatic pipeline does the same thing every time (assuming deterministic code). An agentic assistant does approximately the same thing but with variation based on how the human interacts. An autonomous agent may take entirely different paths to the same goal on different runs. Predictability decreases as orchestration authority shifts to the model.
+
+**Control surface.** Control surface is a direct consequence of orchestration authority. When the developer holds the loop, every step boundary is a potential control point. When the model holds the loop, the developer only gets control where the runtime exposes it. This isn't just a theoretical distinction — it determines whether you can run validation between model steps, insert human review at arbitrary decision points, or gate actions on business logic. The convergence in capabilities (shared tools, shared protocols) does not converge control surfaces. A programmatic framework calling the same MCP tool as an agentic assistant still has fundamentally more control over what happens before and after that call.
 
 ### The "agentic infrastructure kit" pattern
 
@@ -184,6 +253,12 @@ Start here. Go deeper into the sections below when you need more context.
 | Is reasoning more important than output format? | Yes | **Agentic** (assistant or autonomous) |
 | Can you write a termination spec? | Yes, precisely | **Autonomous** or **programmatic** |
 | Can you write a termination spec? | No, it requires judgment | **Assistant** — human is the termination condition |
+| Do you need per-step validation or gating? | Yes, at arbitrary points | **Programmatic** — maximum control surface |
+| Is HITL needed beyond tool-level approval? | Yes | **Programmatic** or **hybrid** — assistant HITL is limited to runtime mechanisms |
+| What model tier can you afford? | Frontier | Full spectrum available |
+| What model tier can you afford? | Mid-tier | **Programmatic** with agentic subtasks |
+| What model tier can you afford? | Smaller/open | **Programmatic** with structured outputs |
+| Is this a classification or extraction task with known categories? | Yes | **Not an LLM task** — use classifiers, rules, or regex |
 | What's the testability requirement? | Unit tests, CI/CD | **Programmatic** |
 | What's the testability requirement? | Behavioral eval | **Agentic** |
 
