@@ -16,6 +16,8 @@ tags:
   - autonomous-agents
   - agentic-assistants
   - programmatic-pipelines
+  - agent-sdk
+  - control-surface
   - skills
   - mcp
   - convergence
@@ -36,12 +38,13 @@ This document provides a framework for choosing where on the spectrum a given us
 ## The Spectrum
 
 ```
-Programmatic Frameworks ←——→ Agentic Assistants ←——→ Autonomous Agents
-  developer is outer loop      LLM is outer loop,      LLM is outer loop,
-  model is a function call     human is in the loop     no human in the loop
+Programmatic ←——→ Agent SDK ←——→ Assistant ←——→ Autonomous
+  developer is       managed loop,     LLM is outer loop,   LLM is outer loop,
+  outer loop         programmatic       human is in          no human in
+                     control points     the loop             the loop
 ```
 
-This isn't three boxes with hard boundaries. It's a continuous spectrum with specific tradeoff axes. A system can sit at different points on the spectrum for different parts of its workflow — a programmatic pipeline that delegates open-ended subtasks to an agentic assistant, or an autonomous agent that escalates ambiguous decisions to a human-in-the-loop step.
+This isn't four boxes with hard boundaries. It's a continuous spectrum with specific tradeoff axes. A system can sit at different points on the spectrum for different parts of its workflow — a programmatic pipeline that delegates open-ended subtasks to an agentic assistant, an autonomous agent that escalates ambiguous decisions to a human-in-the-loop step, or an Agent SDK integration that runs the same agent headlessly with tool-boundary control.
 
 The position on the spectrum is determined by the answers to three questions:
 
@@ -67,7 +70,7 @@ The model has no agency over the workflow. It doesn't decide to use a tool, sear
 LLM reasons → proposes action → human approves → LLM executes → LLM reasons → ...
 ```
 
-The model has agency over the workflow but the human has authority over execution. This is the pattern of Claude Code, Cursor, Codex, and terminal-based coding agents. It's also the pattern of interactive assistants built on infrastructure kits that provide an agent loop, tool execution, and a UI for human interaction.
+The model has agency over the workflow but the human has authority over execution. This is the pattern of Claude Code, Cursor, Codex, and terminal-based coding agents. It's also the pattern of interactive assistants built on infrastructure kits that provide an agent loop, tool execution, and a UI for human interaction. When these same agents are exposed through an SDK for programmatic use, they move left on the spectrum toward the Agent SDK pattern — same capabilities, different control surface (see *Agent SDKs: The Convergence Made Concrete*).
 
 **Autonomous agents.** The LLM is the outer loop and there's no human watching. The agent receives a task specification, reasons about it, executes tools, evaluates its own progress, and terminates when it determines the task is complete (or when it hits a budget/timeout). Recovery from failure is automated — retry policies, fallback strategies, escalation paths that don't involve a human.
 
@@ -75,7 +78,7 @@ The model has agency over the workflow but the human has authority over executio
 LLM receives spec → reasons → executes → self-evaluates → reasons → ... → terminates
 ```
 
-The model has agency over both the workflow and the termination condition. This is the pattern of headless agent execution (Claude Agent SDK in `--print` mode), CI/CD-integrated agents, background processing agents, and any system where an agent runs unattended.
+The model has agency over both the workflow and the termination condition. This is the pattern of CI/CD-integrated agents, background processing agents, and any system where an agent runs unattended. Note that Agent SDKs can operate in this mode — running headlessly with no human — but they also support programmatic control points (callbacks, hooks) that blur the line between autonomous operation and programmatic gating. What distinguishes a true autonomous agent from an Agent SDK running headlessly is whether the system has pre-designed policy checks and termination specifications rather than just tool-level callbacks.
 
 ### The Termination Condition
 
@@ -151,15 +154,18 @@ You're also subject to the runtime's infrastructure constraints — MCP client t
 
 **Autonomous agents have the programmatic control surface but at design time, not runtime.** You can insert validation, gating, and policy checks into the autonomous agent's execution loop. But you define them before the agent runs. There's no human to intervene ad hoc — every control point must be anticipated and coded. This is the same control surface as the programmatic model, with the additional challenge that the model's *path* through those control points is non-deterministic. You can gate every tool call, but you can't predict which tool calls the agent will make or in what order.
 
-| Aspect | Programmatic | Assistant | Autonomous |
-|--------|-------------|-----------|------------|
-| Validation between steps | Any step, developer-controlled | Runtime-exposed hooks only | Any step, pre-designed |
-| Human-in-the-loop placement | Anywhere (it's a function call) | MCP gates, elicitations, steering | Not available at runtime |
-| Decision gating | Code-level, arbitrary logic | Agent cooperation required | Policy-based, pre-designed |
-| Infrastructure constraints | None (you own the loop) | Runtime-imposed (timeouts, session limits) | Self-imposed (budgets, timeouts) |
-| Per-step output validation | Native (result validators, assertions) | Only if the runtime supports it | Native (but must be pre-designed) |
+| Aspect | Programmatic | Agent SDK | Assistant | Autonomous |
+|--------|-------------|-----------|-----------|------------|
+| Validation between steps | Any step, developer-controlled | At tool boundaries (callbacks/hooks) | Runtime-exposed hooks only | Any step, pre-designed |
+| Human-in-the-loop placement | Anywhere (it's a function call) | At tool boundaries (`canUseTool` callbacks) | MCP gates, elicitations, steering | Not available at runtime |
+| Decision gating | Code-level, arbitrary logic | Tool-level, callback-driven | Agent cooperation required | Policy-based, pre-designed |
+| Infrastructure constraints | None (you own the loop) | SDK-managed (but you own the process) | Runtime-imposed (timeouts, session limits) | Self-imposed (budgets, timeouts) |
+| Per-step output validation | Native (result validators, assertions) | At tool boundaries + final structured output | Only if the runtime supports it | Native (but must be pre-designed) |
+| Tool infrastructure | You build it | Provided (file I/O, bash, search, etc.) | Provided | You build or inherit it |
 
-**Rule of thumb:** If you need to gate, validate, or intervene at specific decision points within the workflow — not just at tool boundaries — that pushes you toward the programmatic end of the spectrum. The more granular your control needs, the more the programmatic model pays for itself.
+The Agent SDK column is the convergence point — see *Agent SDKs: The Convergence Made Concrete* below for detailed treatment.
+
+**Rule of thumb:** If you need to gate, validate, or intervene at specific decision points within the workflow — not just at tool boundaries — that pushes you toward the programmatic end of the spectrum. If tool-boundary control is sufficient and you want the managed agent loop with its built-in tools, the Agent SDK is the sweet spot. The more granular your control needs, the more the programmatic model pays for itself.
 
 ### Model Capability and the Spectrum
 
@@ -193,11 +199,11 @@ Recognizing this boundary avoids the common mistake of using an LLM (and paying 
 
 ## The Infrastructure Convergence
 
-The three points on the spectrum are converging from both directions. Understanding the convergence helps you choose based on current needs without locking yourself into a dead end.
+The points on the spectrum are converging from both directions. Understanding the convergence helps you choose based on current needs without locking yourself into a dead end.
 
 ### What's converging: the capability layer
 
-Skills, MCP servers, tool definitions, and retrieval patterns work across all three architectural categories. A well-designed MCP server that provides search tools over a compliance corpus is equally useful to:
+Skills, MCP servers, tool definitions, and retrieval patterns work across all architectural categories. A well-designed MCP server that provides search tools over a compliance corpus is equally useful to:
 
 - A programmatic pipeline that calls `search_standards(query)` at a predetermined step
 - An agentic assistant that decides when to search based on the conversation
@@ -231,6 +237,73 @@ This pattern serves all three points on the spectrum:
 
 The runtime doesn't determine your architecture. The wiring does. This is the convergence in practice: the same core infrastructure, different orchestration layers on top.
 
+### Agent SDKs: The Convergence Made Concrete
+
+The infrastructure kit pattern has matured into a specific, increasingly common category: **Agent SDKs** — libraries that expose the same agent runtime used by interactive assistants as a programmatic interface. Both Anthropic and OpenAI ship Agent SDKs alongside their interactive coding assistants. This isn't coincidental; it's the infrastructure convergence taking its most practical form.
+
+**What an Agent SDK provides:**
+
+- **The managed agent loop.** The agent reasons, calls tools, observes results, and decides what to do next. You don't build this — it's the same loop that powers the interactive assistant, extracted into a library.
+- **Built-in tool infrastructure.** File I/O, code execution, search, web access — already implemented, tested, and maintained. The same tools the interactive agent uses, available without you building or integrating them.
+- **Session management.** Persistence, resumption, forking. Context management, auto-compaction, context window budgets. Handled by the SDK, not by your code.
+- **Structured outputs.** JSON schema enforcement with Pydantic/Zod support natively. This gives you coverage determinism (see *Output Determinism*) — the schema defines the evaluation space — without building schema enforcement yourself.
+- **Programmatic control points.** Tool approval callbacks (e.g., `canUseTool`), lifecycle hooks (pre-tool-use, post-tool-use), permission modes that restrict what the agent is allowed to do. These are code-level controls, not runtime-imposed constraints.
+- **HITL at the tool boundary.** Every tool call can be intercepted, approved, denied, or modified via a callback. This is programmatic HITL — a function call, not a platform feature — but scoped to tool invocations rather than arbitrary code points.
+- **Headless/autonomous operation.** Runs without a terminal UI, in CI/CD pipelines, as a background process, in a task queue. The agent's capabilities don't depend on an interactive session.
+- **Subagent orchestration.** Spawn specialized agents with custom system prompts, restricted tool sets, and different models. Compose multi-agent workflows from the same primitives the interactive assistant uses.
+
+**Where this sits on the spectrum:**
+
+The Agent SDK is not just another point on the spectrum — it's the convergence point where the programmatic and agentic assistant categories actually meet.
+
+```
+Pure Programmatic ←——→ Agent SDK ←——→ Assistant ←——→ Autonomous
+  you own every step     managed loop     managed loop     managed loop
+  model fills blanks     you control at    runtime controls  no human
+                         tool boundaries   intervention pts  at runtime
+```
+
+You get the agent loop and tool infrastructure from the assistant pattern — you didn't build it, you don't maintain it. You get programmatic control from the programmatic pattern — callbacks, hooks, structured outputs, permission modes, all as code you write and test. And you get headless operation from the autonomous pattern — no human required at runtime.
+
+This means you don't have to choose between "build everything yourself for maximum control" (pure programmatic) and "accept the runtime's constraints for the managed agent loop" (pure assistant). The Agent SDK gives you the managed loop with programmatic control points.
+
+**What you don't get that pure programmatic gives you:**
+
+The agent still holds the orchestration loop. You control *what the agent is allowed to do* (tool access, permissions) and *what happens at tool boundaries* (callbacks, hooks). But you don't control *what the agent decides to do between those boundaries*. The agent's reasoning path — which tool to call, in what order, how to interpret results — is the model's decision, not yours.
+
+In a pure programmatic framework, every step is your code. Between model call A and model call B, you wrote the logic that connects them. In the Agent SDK, the steps between your control points are the model's reasoning. You can gate the tools, but you can't gate the thinking.
+
+This matters when:
+
+- **You need fully deterministic execution paths.** If the workflow must follow the same sequence every time, the agent loop is overhead. Code the pipeline.
+- **You need per-step validation at every reasoning step, not just tool boundaries.** If you need to validate what the model *decided* before it acts — not just intercept the action — the Agent SDK's tool-boundary control isn't granular enough.
+- **The workflow is so well-understood that the agent's reasoning adds no value.** If you already know the steps — extract, validate, transform, load — letting an agent *decide* to do those steps is unnecessary indirection. The agent loop adds latency and cost without adding capability.
+
+**When the Agent SDK is the right choice:**
+
+The Agent SDK shines when you want the agent's *reasoning* but need *programmatic integration*. Concrete indicators:
+
+- The task benefits from the agent's ability to reason about what to do, but must run without a human at the terminal (CI/CD, batch processing, API backends)
+- You need the built-in tool infrastructure (file I/O, code execution, search) without building and maintaining it yourself
+- Tool-boundary control is sufficient — you don't need to gate between reasoning steps, just gate the actions the agent takes
+- You want structured outputs enforced by schema, not by prompt engineering
+- The migration path is from an interactive assistant workflow that already works, and you want to move it to programmatic/pipeline use
+
+**The control surface comparison, updated:**
+
+| Aspect | Programmatic | Agent SDK | Assistant | Autonomous |
+|--------|-------------|-----------|-----------|------------|
+| Validation between steps | Any step, developer-controlled | At tool boundaries (callbacks/hooks) | Runtime-exposed hooks only | Any step, pre-designed |
+| Human-in-the-loop placement | Anywhere (it's a function call) | At tool boundaries (`canUseTool` callbacks) | MCP gates, elicitations, steering | Not available at runtime |
+| Decision gating | Code-level, arbitrary logic | Tool-level, callback-driven | Agent cooperation required | Policy-based, pre-designed |
+| Infrastructure constraints | None (you own the loop) | SDK-managed (but you own the process) | Runtime-imposed (timeouts, session limits) | Self-imposed (budgets, timeouts) |
+| Per-step output validation | Native (result validators, assertions) | At tool boundaries + final structured output | Only if the runtime supports it | Native (but must be pre-designed) |
+| Tool infrastructure | You build it | Provided (file I/O, bash, search, etc.) | Provided | You build or inherit it |
+
+The key column is "Tool infrastructure." In pure programmatic, you build your tools. In the Agent SDK, you inherit them. That's the entire value proposition in one row — the managed loop *with* its tools, controlled at the boundaries *you* define.
+
+**Rule of thumb:** If you're building an interactive assistant that works well and you need it to run headlessly — in a pipeline, in CI/CD, as a batch processor — the Agent SDK is the natural migration path. If you need control between tool boundaries, not just at them, you need pure programmatic. If you don't need the agent's reasoning at all, the Agent SDK's managed loop is overhead you don't need.
+
 ## Decision Heuristics
 
 Start here. Go deeper into the sections below when you need more context.
@@ -259,6 +332,10 @@ Start here. Go deeper into the sections below when you need more context.
 | What model tier can you afford? | Mid-tier | **Programmatic** with agentic subtasks |
 | What model tier can you afford? | Smaller/open | **Programmatic** with structured outputs |
 | Is this a classification or extraction task with known categories? | Yes | **Not an LLM task** — use classifiers, rules, or regex |
+| Do you want the managed agent loop without building tools? | Yes | **Agent SDK** — managed loop with programmatic control |
+| Do you need control between tool boundaries (not just at them)? | Yes | **Pure programmatic** — Agent SDK control is at tool boundaries |
+| Is the workflow well-understood enough that agent reasoning adds no value? | Yes | **Pure programmatic** — the agent loop is overhead |
+| Are you migrating an interactive assistant to headless/pipeline use? | Yes | **Agent SDK** — same capabilities, programmatic integration |
 | What's the testability requirement? | Unit tests, CI/CD | **Programmatic** |
 | What's the testability requirement? | Behavioral eval | **Agentic** |
 
@@ -332,9 +409,31 @@ Additionally, you need new infrastructure: durable execution (checkpointing, cra
 
 **What's not portable:** The agent's reasoning-based orchestration. You're replacing cognition with code, which means explicitly coding every decision point that the model was handling. This is feasible when you've observed enough executions to understand the decision space. It's premature when the workflow is still being explored.
 
+### Assistant → Agent SDK
+
+**When to migrate:** The interactive assistant works well for the task, but you need it to run without a human at the terminal. CI/CD integration, batch processing, API backends, task queues — any context where the agent's capabilities are valuable but interactive use isn't feasible.
+
+**What's portable:** Everything. The Agent SDK exposes the same agent runtime, the same tools, the same model capabilities. The agent's reasoning, tool use, and output quality are identical. This is the easiest migration on the spectrum because you're not changing the agent — you're changing the interface.
+
+**What changes:** The control surface expands. You gain programmatic control points — tool approval callbacks, lifecycle hooks, structured output enforcement, permission modes — that the interactive assistant exposed through its UI. The human-in-the-loop becomes code: a `canUseTool` callback replaces the terminal approval prompt. Infrastructure constraints (timeouts, session limits) become yours to manage rather than the runtime's to impose.
+
+**What to watch for:** The temptation to over-control. The interactive assistant worked because the agent reasoned freely between your interventions. If you add a callback to every tool call and a gate to every decision, you've rebuilt the interactive approval loop in code — slower, more brittle, and no more autonomous. Start with minimal control points and add gating only where the workflow requires it.
+
+### Agent SDK → Pure Programmatic
+
+**When to migrate:** The agent's reasoning adds no value because the workflow is fully understood. Every step is known. The agent loop — reasoning about what to do next — is overhead that adds latency and cost without adding capability. You want deterministic execution paths, unit-testable steps, and no model reasoning between your code.
+
+**What's portable:** Tool integrations (especially if they're MCP-based), structured output schemas, validation logic from callbacks and hooks. The understanding of the workflow itself — which you likely gained by observing the agent's behavior.
+
+**What's not portable:** The agent loop and the built-in tool infrastructure. You're replacing the managed loop with your own code, which means implementing (or finding libraries for) file I/O, code execution, search, and any other tools the agent was using natively. You're also replacing the agent's reasoning with explicit code paths, which means every decision point that the model was handling becomes a conditional, a switch, or a routing function that you write and maintain.
+
+**When this migration is premature:** If you're still discovering the workflow. The agent's reasoning is a discovery tool — by observing which tools it calls, in what order, and how it handles edge cases, you learn the workflow's actual decision tree. Replacing the agent loop with code before you understand the decision tree produces a pipeline that handles the cases you've seen and fails on everything else.
+
 ### The migration principle
 
 Capabilities (tools, skills, MCP, retrieval) migrate easily. Orchestration (who decides what to do next) does not. Design your capabilities to be orchestration-agnostic, and accept that changing orchestration architectures is a significant engineering effort, not a configuration change.
+
+The Agent SDK occupies a privileged position in migration paths: it's the easiest destination from the assistant pattern (same capabilities, programmatic interface) and a natural stepping stone toward pure programmatic (you can observe the agent's behavior, extract the workflow, then replace the agent loop with code). If you're unsure whether your workflow is understood well enough for pure programmatic, the Agent SDK lets you run it headlessly while you learn.
 
 ## Anti-Patterns
 
@@ -356,4 +455,4 @@ Capabilities (tools, skills, MCP, retrieval) migrate easily. Orchestration (who 
 
 The architectural spectrum is determined by orchestration authority: who decides what happens next, who decides when it's done, and who recovers when something fails. The capability layer — tools, skills, MCP, retrieval — is increasingly shared across all points on the spectrum. Build capabilities to be orchestration-agnostic. Choose your orchestration position based on the workflow's actual requirements: how known the path is, whether a human is available, what failure mode is acceptable, and whether you can write a termination specification.
 
-The convergence is real. The same infrastructure increasingly serves all three architectural categories. But convergence in capabilities doesn't mean convergence in orchestration. Programmatic control, human-in-the-loop steering, and autonomous execution remain fundamentally different architectures with fundamentally different failure modes. Choosing between them is an architectural decision, not a framework selection.
+The convergence is real. The same infrastructure increasingly serves all points on the spectrum — and the Agent SDK pattern is that convergence made concrete, giving you the managed agent loop with programmatic control at the tool boundaries. But convergence in capabilities doesn't mean convergence in orchestration. Programmatic control, SDK-mediated tool gating, human-in-the-loop steering, and autonomous execution remain fundamentally different architectures with fundamentally different failure modes. Choosing between them is an architectural decision, not a framework selection.
